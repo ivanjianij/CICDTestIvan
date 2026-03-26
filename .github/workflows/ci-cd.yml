@@ -24,14 +24,14 @@ jobs:
           cache: maven
 
       - name: Build and test
-        run: mvn -B clean verify
+        run: mvn -B -f backend/pom.xml clean verify
 
       - name: Upload JAR artifact
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: spring-boot-app
-          path: target/*.jar
+          path: backend/target/*.jar
 
   aws-package:
     if: github.event_name == 'push'
@@ -50,13 +50,13 @@ jobs:
           cache: maven
 
       - name: Package application
-        run: mvn -B -DskipTests clean package
+        run: mvn -B -f backend/pom.xml -DskipTests clean package
 
       - name: Prepare deploy bundle
         run: |
           mkdir -p dist
-          cp target/*.jar dist/app.jar
-          cp buildspec.yml dist/buildspec.yml
+          cp backend/target/*.jar dist/app.jar
+          cp infra/buildspec.yml dist/buildspec.yml
 
       - name: Upload deploy bundle
         uses: actions/upload-artifact@v4

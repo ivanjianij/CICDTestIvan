@@ -1,4 +1,9 @@
 /target/
+/backend/target/
 /.idea/
 /.vscode/
 *.iml
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars

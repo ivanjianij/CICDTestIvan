@@ -7,9 +7,9 @@ phases:
 
   build:
     commands:
-      - mvn -B clean verify
+      - mvn -B -f backend/pom.xml clean verify
 
 artifacts:
   files:
-    - target/*.jar
-    - buildspec.yml
+    - backend/target/*.jar
+    - infra/buildspec.yml
