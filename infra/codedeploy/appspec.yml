@@ -1,0 +1,24 @@
+version: 0.0
+os: linux
+
+files:
+  - source: app.jar
+    destination: /opt/cicdtestivan
+
+hooks:
+  ApplicationStop:
+    - location: scripts/stop.sh
+      timeout: 180
+      runas: root
+  AfterInstall:
+    - location: scripts/deploy.sh
+      timeout: 180
+      runas: root
+  ApplicationStart:
+    - location: scripts/start.sh
+      timeout: 180
+      runas: root
+  ValidateService:
+    - location: scripts/validate.sh
+      timeout: 180
+      runas: root

@@ -25,6 +25,12 @@ variable "artifact_bucket_name" {
   type        = string
 }
 
+variable "ec2_instance_type" {
+  description = "EC2 instance type used for the application server."
+  type        = string
+  default     = "t3.micro"
+}
+
 variable "tags" {
   description = "Optional tags applied to supported resources."
   type        = map(string)

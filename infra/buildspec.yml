@@ -9,7 +9,15 @@ phases:
     commands:
       - mvn -B -f backend/pom.xml clean verify
 
+  post_build:
+    commands:
+      - rm -rf dist
+      - mkdir -p dist/scripts
+      - cp backend/target/*.jar dist/app.jar
+      - cp infra/codedeploy/appspec.yml dist/appspec.yml
+      - cp infra/codedeploy/scripts/*.sh dist/scripts/
+
 artifacts:
+  base-directory: dist
   files:
-    - backend/target/*.jar
-    - infra/buildspec.yml
+    - "**/*"

@@ -12,6 +12,27 @@ locals {
   )
 }
 
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
 data "aws_iam_policy_document" "codepipeline_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -107,6 +128,11 @@ data "aws_iam_policy_document" "codepipeline" {
   }
 
   statement {
+    actions   = ["codedeploy:*"]
+    resources = ["*"]
+  }
+
+  statement {
     actions = [
       "codeconnections:UseConnection",
       "codestar-connections:UseConnection",
@@ -158,6 +184,27 @@ resource "aws_iam_role_policy" "codebuild" {
   policy = data.aws_iam_policy_document.codebuild.json
 }
 
+resource "aws_security_group" "app" {
+  name        = "${var.project_name}-app-sg"
+  description = "Security group for the application EC2 instance."
+  vpc_id      = data.aws_vpc.default.id
+  tags        = local.common_tags
+
+  ingress {
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_codebuild_project" "app" {
   name         = "${var.project_name}-build"
   service_role = aws_iam_role.codebuild.arn
@@ -178,6 +225,113 @@ resource "aws_codebuild_project" "app" {
   source {
     type      = "CODEPIPELINE"
     buildspec = "infra/buildspec.yml"
+  }
+}
+
+resource "aws_iam_role" "codedeploy_service" {
+  name = "${var.project_name}-codedeploy-service-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "codedeploy.amazonaws.com"
+        }
+      }
+    ]
+  })
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy_service" {
+  role       = aws_iam_role.codedeploy_service.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
+}
+
+resource "aws_iam_role" "ec2" {
+  name = "${var.project_name}-ec2-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_codedeploy" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy"
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_ssm" {
+  role       = aws_iam_role.ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ec2" {
+  name = "${var.project_name}-ec2-instance-profile"
+  role = aws_iam_role.ec2.name
+}
+
+resource "aws_instance" "app" {
+  ami                         = data.aws_ami.amazon_linux_2.id
+  instance_type               = var.ec2_instance_type
+  subnet_id                   = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids      = [aws_security_group.app.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2.name
+  associate_public_ip_address = true
+
+  user_data = <<-EOF
+              #!/bin/bash
+              set -euxo pipefail
+              yum update -y
+              yum install -y ruby wget java-17-amazon-corretto
+              cd /home/ec2-user
+              wget https://aws-codedeploy-${var.aws_region}.s3.${var.aws_region}.amazonaws.com/latest/install
+              chmod +x ./install
+              ./install auto
+              systemctl enable codedeploy-agent
+              systemctl start codedeploy-agent
+              EOF
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${var.project_name}-app"
+    }
+  )
+}
+
+resource "aws_codedeploy_app" "app" {
+  compute_platform = "Server"
+  name             = "${var.project_name}-app"
+  tags             = local.common_tags
+}
+
+resource "aws_codedeploy_deployment_group" "app" {
+  app_name               = aws_codedeploy_app.app.name
+  deployment_group_name  = "${var.project_name}-deployment-group"
+  service_role_arn       = aws_iam_role.codedeploy_service.arn
+  deployment_config_name = "CodeDeployDefault.AllAtOnce"
+
+  ec2_tag_filter {
+    key   = "Name"
+    type  = "KEY_AND_VALUE"
+    value = "${var.project_name}-app"
+  }
+
+  deployment_style {
+    deployment_option = "WITHOUT_TRAFFIC_CONTROL"
+    deployment_type   = "IN_PLACE"
   }
 }
 
@@ -226,6 +380,24 @@ resource "aws_codepipeline" "app" {
 
       configuration = {
         ProjectName = aws_codebuild_project.app.name
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy"
+
+    action {
+      name            = "DeployToEC2"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "CodeDeploy"
+      version         = "1"
+      input_artifacts = ["build_output"]
+
+      configuration = {
+        ApplicationName     = aws_codedeploy_app.app.name
+        DeploymentGroupName = aws_codedeploy_deployment_group.app.deployment_group_name
       }
     }
   }
