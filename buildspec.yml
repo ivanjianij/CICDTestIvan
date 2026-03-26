@@ -1,0 +1,15 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto17
+
+  build:
+    commands:
+      - mvn -B clean verify
+
+artifacts:
+  files:
+    - target/*.jar
+    - buildspec.yml
